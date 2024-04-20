@@ -1,14 +1,14 @@
 //// Module for Ethereum providers (e.g JSON-RPC, Alchemy, IPC, etc)
 
 import error.{type RpcError}
-import falcon.{type FalconError, extract_headers, merge_opts, new}
-import falcon/core.{
-  type FalconResponse, type Opts, ClientOptions, Headers, Json, Url,
-}
-import falcon/hackney.{Timeout}
 import gleam/dynamic
-import gleam/int.{parse}
+import gleam/hackney
+import gleam/http.{Post}
+import gleam/http/request
+import gleam/int.{base_parse}
 import gleam/json
+import gleam/result
+import gleam/string.{drop_left}
 import gleeunit/should
 
 pub opaque type EthereumProvider {
@@ -29,7 +29,7 @@ pub fn new_json_rpc_provider(rpc_url: String) -> EthereumProvider {
 }
 
 /// Fetches the current block number using `eth_blockNumber`.
-pub fn get_block_number(provider: EthereumProvider) -> Result(Int, Nil) {
+pub fn get_block_number(provider: EthereumProvider) -> Result(Int, RpcError) {
   case provider {
     JsonRpcProvider(rpc_url) -> {
       let decoder =
@@ -43,17 +43,24 @@ pub fn get_block_number(provider: EthereumProvider) -> Result(Int, Nil) {
         |> encode_rpc_call
         |> json.to_string
 
-      let res =
-        falcon.new(
-          base_url: Url(rpc_url),
-          headers: [#("content-type", "application/json")],
-          timeout: falcon.default_timeout,
-        )
-        |> falcon.post("/", call_body, Json(decoder), options: [])
-        |> should.be_ok
-        |> fn(res: FalconResponse(JsonRpcResponse)) { res.body }
+      // Send RPC call.
+      let assert Ok(request) = request.to(rpc_url)
+      let assert Ok(response) =
+        request
+        |> request.prepend_header("content-type", "application/json")
+        |> request.set_method(Post)
+        |> request.set_body(call_body)
+        |> hackney.send
 
-      parse(res.result)
+      response.status
+      |> should.equal(200)
+
+      let assert Ok(rpc_res) = json.decode(response.body, decoder)
+      let block_num =
+        drop_left(rpc_res.result, 2)
+        |> base_parse(16)
+        |> result.unwrap(0)
+      Ok(block_num)
     }
   }
 }
@@ -66,8 +73,7 @@ fn encode_rpc_call(json_rpc_call: JsonRpcCall) {
     #("id", json.int(json_rpc_call.id)),
   ])
 }
-
-fn handle_rpc_res(res: Result(FalconResponse(JsonRpcResponse), FalconError)) {
-  todo
-  "Implement handling the response so that any errors from Falcon will be logged thru ``io.debug()``"
-}
+//fn handle_rpc_res(res: Result(FalconResponse(JsonRpcResponse), FalconError)) {
+//  todo
+//  "Implement handling the response so that any errors from Falcon will be logged thru ``io.debug()``"
+//}

@@ -1,5 +1,5 @@
 # ethers-gleam
-An (in)complete Ethereum library written in Gleam.
+## An (in)complete Ethereum library written in Gleam.
 ![Just kidding star to let the feds know you are joking!](media/justkiddingstar.jpg)
 
 ## Why?

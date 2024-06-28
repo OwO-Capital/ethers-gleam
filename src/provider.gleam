@@ -8,8 +8,7 @@ import gleam/http/request
 import gleam/int.{base_parse}
 import gleam/json
 import gleam/result
-import gleam/string.{drop_left}
-import gleeunit/should
+import gleam/string
 
 pub opaque type EthereumProvider {
   JsonRpcProvider(rpc_url: String)
@@ -32,15 +31,8 @@ pub fn new_json_rpc_provider(rpc_url: String) -> EthereumProvider {
 pub fn get_block_number(provider: EthereumProvider) -> Result(Int, RpcError) {
   case provider {
     JsonRpcProvider(rpc_url) -> {
-      let rpc_res = rpc_call(rpc_url, "eth_blockNumber", [])
-      let block_num =
-        drop_left(rpc_res.result, 2)
-        |> base_parse(16)
-        |> result.unwrap(0)
-
-      should.not_equal(block_num, 0)
-      // TODO: We could handle unwrapping better
-
+      use rpc_res <- result.try(rpc_call(rpc_url, "eth_blockNumber", []))
+      use block_num <- result.try(process_hex(rpc_res.result))
       Ok(block_num)
     }
   }
@@ -49,15 +41,8 @@ pub fn get_block_number(provider: EthereumProvider) -> Result(Int, RpcError) {
 pub fn get_chain_id(provider: EthereumProvider) -> Result(Int, RpcError) {
   case provider {
     JsonRpcProvider(rpc_url) -> {
-      let rpc_res = rpc_call(rpc_url, "eth_chainId", [])
-      let chain_id =
-        drop_left(rpc_res.result, 2)
-        |> base_parse(16)
-        |> result.unwrap(0)
-
-      should.not_equal(chain_id, 0)
-      // TODO: We could handle unwrapping better
-
+      use rpc_res <- result.try(rpc_call(rpc_url, "eth_chainId", []))
+      use chain_id <- result.try(process_hex(rpc_res.result))
       Ok(chain_id)
     }
   }
@@ -69,26 +54,27 @@ pub fn get_balance(
 ) -> Result(Int, RpcError) {
   case provider {
     JsonRpcProvider(rpc_url) -> {
-      let rpc_res = rpc_call(rpc_url, "eth_getBalance", [address, "latest"])
-      let balance = process_hex(rpc_res.result)
-
+      use rpc_res <- result.try(
+        rpc_call(rpc_url, "eth_getBalance", [address, "latest"]),
+      )
+      use balance <- result.try(process_hex(rpc_res.result))
       Ok(balance)
     }
   }
 }
 
-fn process_hex(hex_string: String) -> Int {
-  drop_left(hex_string, 2)
+fn process_hex(hex_string: String) -> Result(Int, RpcError) {
+  hex_string
+  |> string.drop_left(2)
   |> base_parse(16)
-  |> result.unwrap(0)
-  // TODO: Better unwrapping starts here ^
+  |> result.map_error(fn(_) { error.CallFailed })
 }
 
 fn rpc_call(
   url: String,
   method: String,
   params: List(String),
-) -> JsonRpcResponse {
+) -> Result(JsonRpcResponse, RpcError) {
   let call = JsonRpcCall("2.0", method, params, 0)
   let decoder =
     dynamic.decode1(JsonRpcResponse, dynamic.field("result", dynamic.string))
@@ -97,20 +83,27 @@ fn rpc_call(
     |> encode_rpc_call
     |> json.to_string
 
-  // Send RPC call.
-  let assert Ok(request) = request.to(url)
-  let assert Ok(response) =
+  use request <- result.try(
+    request.to(url)
+    |> result.map_error(fn(_) { error.InvalidUrl }),
+  )
+
+  use response <- result.try(
     request
     |> request.prepend_header("content-type", "application/json")
     |> request.set_method(Post)
     |> request.set_body(call_body)
     |> hackney.send
+    |> result.map_error(fn(_) { error.CallFailed }),
+  )
 
-  response.status
-  |> should.equal(200)
-
-  let assert Ok(rpc_res) = json.decode(response.body, decoder)
-  rpc_res
+  case response.status {
+    200 -> {
+      json.decode(response.body, decoder)
+      |> result.map_error(fn(_) { error.CallFailed })
+    }
+    _ -> Error(error.CallFailed)
+  }
 }
 
 fn encode_rpc_call(json_rpc_call: JsonRpcCall) {
@@ -121,7 +114,3 @@ fn encode_rpc_call(json_rpc_call: JsonRpcCall) {
     #("id", json.int(json_rpc_call.id)),
   ])
 }
-//fn handle_rpc_res(res: Result(FalconResponse(JsonRpcResponse), FalconError)) {
-//  todo
-//  "Implement handling the response so that any errors from Falcon will be logged thru ``io.debug()``"
-//}
